@@ -1,0 +1,28 @@
+{
+    "name": "ollama",
+    "image": "m10i1986/ollama-running-on-gpupods:latest",
+    "disk_gb": 32,
+    "onstart_script": "_shared/onstart.sh",
+    "runtype": "ssh",
+    "env": {
+        "TAILSCALE_HOSTNAME": "ollama",
+        "TAILSCALE_TAG": "cloud-gpu-pods"
+    },
+    "exposed_ports": [],
+    "search": {
+        "gpu_name": [
+            "RTX 5090"
+        ],
+        "gpu_ram_gb_min": 32,
+        "num_gpus": 1,
+        "disk_gb_min": 32,
+        "cuda_min": 12.8,
+        "rentable": true,
+        "verified": true,
+        "max_dph": 0.6,
+        "order": "dph_total",
+        "geolocation": [
+            "JP"
+        ]
+    }
+}

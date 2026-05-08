@@ -1,0 +1,29 @@
+{
+    "name": "comfyui",
+    "image": "m10i1986/comfyui-running-on-gpupods:latest",
+    "disk_gb": 32,
+    "onstart_script": "_shared/onstart.sh",
+    "runtype": "ssh",
+    "env": {
+        "TORCH_PLATFORM": "CUDA12.8",
+        "TAILSCALE_HOSTNAME": "comfyui",
+        "TAILSCALE_TAG": "cloud-gpu-pods"
+    },
+    "exposed_ports": [],
+    "search": {
+        "gpu_name": [
+            "RTX 5090"
+        ],
+        "gpu_ram_gb_min": 32,
+        "num_gpus": 1,
+        "disk_gb_min": 32,
+        "cuda_min": 12.8,
+        "rentable": true,
+        "verified": true,
+        "max_dph": 0.6,
+        "order": "dph_total",
+        "geolocation": [
+            "JP"
+        ]
+    }
+}

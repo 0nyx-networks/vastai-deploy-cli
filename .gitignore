@@ -1,0 +1,34 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Local state (per-user / per-deployment)
+denylist.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual env
+.venv/
+venv/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log
+
+# Deployment templates
+templates/*/onstart.sh
+!templates/_shared/onstart.sh
