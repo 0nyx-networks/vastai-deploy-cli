@@ -5,7 +5,7 @@ Vast.ai の Pod へコンテナを **1コマンドでデプロイ + 後始末** 
 - **Tailscale auth-key を都度発行** (ephemeral / 1度きり / 10分有効)
 - **同名 Offline デバイスを事前削除** → Tailscale 上の重複名衝突を回避
 - **GPU / 国 / VRAM / CUDA / 価格** で自動オファー検索 (国に優先順位あり、JP→US 等)
-- **登録待機** (`wait_for_online` / 300秒タイムアウト) → 成功で auth-key を自動 revoke
+- **登録待機** (`--wait` / 300秒タイムアウト) → 成功で auth-key を自動 revoke
 - **destroy 時に Vast.ai 消滅確認 + Tailscale デバイス削除**
 - **ラベル指名** (`ollama` / `comfyui` 等) でも instance id でも操作可
 - **denylist** で「もう借りないホスト」を永続除外
@@ -20,10 +20,11 @@ app/
   deploy.py     - 一連の処理オーケストレーション
   denylist.py   - machine_id / host_id 永続除外リスト
   cli.py        - typer ベースの CLI
-  api.py        - FastAPI HTTP ラッパー (POST /deploy)
+  api.py        - FastAPI HTTP ラッパー (POST /deploy, GET /instances, GET /healthz)
 templates/
   ollama/       - profile.json (+ onstart.sh: ローカル)
   comfyui/      - profile.json (+ onstart.sh: ローカル)
+  studio/       - profile.json (+ onstart.sh: ローカル)
 denylist.json   - 永続除外マシン (gitignore 対象)
 .env            - API キー (gitignore 対象)
 ```
@@ -69,29 +70,28 @@ zsh / fish / powershell の場合は `--install-completion zsh` 等。
 
 ## デプロイ
 
-> **既定は dry-run** (計画のみ表示)。実際に作成するときは `--execute` を付ける。
-> 実行時は **Tailscale デバイス登録の online 確認** までブロック (300秒タイムアウト)。
+> **既定は実行** (deploy)。計画のみ確認したいときは `--dry-run` を付ける。
+> Tailscale への登録確認は **デフォルト off** (`--no-wait`)。`--wait` を付けると online 化まで最大 300秒ブロック。
 
 ```bash
-# 計画だけ表示 (デフォルト)
+# 本実行 (デフォルト)
 vastai-cli deploy ollama
 vastai-cli deploy comfyui -v
 
-# 本実行
-vastai-cli deploy ollama --execute
-vastai-cli deploy comfyui --execute
+# 計画のみ表示 (dry-run)
+vastai-cli deploy ollama --dry-run
+
+# Tailscale 登録まで待機
+vastai-cli deploy ollama --wait
 
 # 名前 (label / Tailscale hostname) を上書き
-vastai-cli deploy ollama --name ollama-dev --execute
+vastai-cli deploy ollama --name ollama-dev
 
 # 既知の offer_id を指名 (検索スキップ)
-vastai-cli deploy ollama --offer-id 12345678 --execute
-
-# Tailscale 待機をスキップして即終了 (発射のみ)
-vastai-cli deploy comfyui --execute --no-wait
+vastai-cli deploy ollama --offer-id 12345678
 
 # 待機タイムアウトを延長 (image pull が大きいイメージ向け)
-vastai-cli deploy comfyui --execute --wait-timeout 600
+vastai-cli deploy comfyui --wait --wait-timeout 600
 ```
 
 ### 内部フロー
@@ -114,13 +114,15 @@ profile.json の `TAILSCALE_HOSTNAME` がそのまま label になっている�
 `ollama` `comfyui` で操作できる。
 
 ```bash
-vastai-cli status                     # 全インスタンス一覧
+vastai-cli instances                  # 全インスタンス一覧 (id/label/status/gpu/image/dph)
+vastai-cli status                     # 全インスタンス詳細一覧 (machine_id/host_id 含む)
 vastai-cli status ollama              # 単体詳細
 vastai-cli status 36412345            # id でも可
 
 vastai-cli logs ollama                # 直近100行
-vastai-cli logs ollama --tail 500     # 行数指定
+vastai-cli logs ollama --tail 500     # 行数指定 (--tail / -n)
 vastai-cli logs ollama -f             # tail -f 風 (Ctrl-C で停止)
+vastai-cli logs ollama -f --interval 5   # ポーリング間隔を変更 (デフォルト3秒)
 vastai-cli logs ollama --daemon       # コンテナ daemon 側
 
 vastai-cli stop ollama                # 停止 (storage 課金は継続)
@@ -129,6 +131,7 @@ vastai-cli start ollama               # 再開
 vastai-cli destroy ollama             # 確認プロンプトあり (default N)
 vastai-cli destroy ollama -y          # 確認スキップ
 vastai-cli destroy ollama --denylist --note "OOM多発"   # 破棄 + 永続除外
+vastai-cli destroy ollama --skip-tailscale   # Tailscale 削除をスキップ
 ```
 
 `destroy` の処理順:
@@ -148,7 +151,9 @@ vastai-cli destroy ollama --denylist --note "OOM多発"   # 破棄 + 永続除�
 ```bash
 vastai-cli denylist show
 vastai-cli denylist add --machine-id 79957 --note "ネット不安定"
+vastai-cli denylist add --host-id 12345 --note "別ホスト除外"
 vastai-cli denylist remove --machine-id 79957
+vastai-cli denylist remove --host-id 12345
 ```
 
 `destroy --denylist` でも自動追加される。
@@ -158,9 +163,9 @@ vastai-cli denylist remove --machine-id 79957
 ## 検索条件のプレビュー / 診断
 
 ```bash
-vastai-cli offers -t ollama --limit 20    # API + クライアント側フィルタ後の候補
-vastai-cli ts-find ollama                 # Tailscale 上の同名/類似デバイスを精査
-vastai-cli ts-purge ollama                # 同名の Offline デバイスを手動掃除
+vastai-cli offers ollama --limit 20    # API + クライアント側フィルタ後の候補
+vastai-cli ts-find ollama              # Tailscale 上の同名/類似デバイスを精査
+vastai-cli ts-purge ollama             # 同名の Offline デバイスを手動掃除
 ```
 
 dry-run の出力には **上位5候補** (`top_candidates`) が含まれるので、選定が妥当か確認できる。
@@ -171,10 +176,18 @@ client-side filter で全部弾かれた場合は `rejects` に **どの条件�
 ## HTTP API
 
 ```bash
-vastai-cli serve --port 8000
+vastai-cli serve --host 127.0.0.1 --port 8000
+
+# デプロイ
 curl -X POST localhost:8000/deploy \
   -H 'content-type: application/json' \
   -d '{"target":"ollama","wait_for_tailscale":true,"wait_timeout":300}'
+
+# インスタンス一覧
+curl localhost:8000/instances
+
+# ヘルスチェック
+curl localhost:8000/healthz
 ```
 
 ---
@@ -191,7 +204,8 @@ curl -X POST localhost:8000/deploy \
   "runtype": "ssh",
   "env": {
     "TAILSCALE_HOSTNAME": "ollama",     // ← Tailscale 上の名前 + Vast.ai label
-    "TAILSCALE_TAG": "cloud-gpu-pods"   // ← prefix `tag:` は自動付与
+    "TAILSCALE_TAG": "cloud-gpu-pods",  // ← prefix `tag:` は自動付与
+    "NUMBER_OF_GPUS": 1                 // ← 数値も可 (str に自動変換される)
     // ここに任意のアプリ env を追加可。
     // TAILSCALE_AUTHKEY は deploy 時に自動注入される。
   },
@@ -210,7 +224,7 @@ curl -X POST localhost:8000/deploy \
 }
 ```
 
-- 追加ターゲットを作る場合は同じ構造の `profile.json` と `onstart.sh` を置けば `-t <new-name>` で利用可能
+- 追加ターゲットを作る場合は同じ構造の `profile.json` と `onstart.sh` を置けば `vastai-cli deploy <new-name>` で利用可能
 - `onstart.sh` は **イメージ内 `entrypoint.sh` を実行する3行スクリプト** で十分 (Tailscale 起動はイメージ側で `TAILSCALE_AUTHKEY` を読む前提)
 - `templates/*/onstart.sh` は **gitignore 対象** (環境固有のローカルカスタマイズを許容するため)
 
@@ -220,5 +234,5 @@ curl -X POST localhost:8000/deploy \
 
 - **ephemeral auth-key**: Vast.ai インスタンス停止 = Tailscale ノード自動削除。`stop` → `start` の再接続では `tailscaled` 側が node-key を保持しているので auth-key 不要 (= 接続維持)
 - Vast.ai のコンテナで `/dev/net/tun` が無いケースが多いため、イメージ側は **`tailscaled --tun=userspace-networking`** で起動する想定
-- `--execute` 付きで実行時は **Tailscale 登録 online 化を 300秒待つ**。タイムアウトしてもインスタンスは destroy されないので、`destroy` で手動回収すること
+- `--wait` 付きで実行時は **Tailscale 登録 online 化を 300秒待つ**。タイムアウトしてもインスタンスは destroy されないので、`destroy` で手動回収すること
 - `destroy` 時の確認プロンプトは `-y` で抑止可。CI / スクリプト用途で利用
