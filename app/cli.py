@@ -504,14 +504,13 @@ def cmd_serve(
 def cmd_ssh(
     target: str = typer.Argument(..., help="Vast.ai instance id or label"),
     user: str = typer.Option("root", "--user", "-u", help="SSH user name"),
+    port: int = typer.Option(22, "--port", "-p", help="SSH port number"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """SSH into a Vast.ai instance via Tailscale.
+    """Show SSH connection info for a Vast.ai instance via Tailscale.
 
-    Connects directly via Tailscale (no port forwarding needed).
+    Displays the command to connect directly via Tailscale (no port forwarding needed).
     """
-    import subprocess
-
     _setup_logging(verbose)
     settings = Settings()
 
@@ -524,6 +523,9 @@ def cmd_ssh(
             label = (instance.get("label") or "").strip()
             if not label:
                 _die(f"instance {instance_id} has no label; cannot identify Tailscale device")
+            # Get SSH connection info from Vast.ai instance
+            vast_ssh_host = instance.get("ssh_host") or instance.get("public_ipaddr") or "unknown"
+            vast_ssh_port = instance.get("ssh_port") or 22
     except VastError as e:
         _die(str(e))
 
@@ -547,15 +549,23 @@ def cmd_ssh(
     except TailscaleError as e:
         _die(str(e))
 
-    # Invoke SSH
-    ssh_target = f"{user}@{ssh_addr}"
-    logging.getLogger(__name__).info("SSH to %s (instance_id=%s, label=%s)", ssh_target, instance_id, label)
-    try:
-        subprocess.run(["ssh", ssh_target], check=False)
-    except FileNotFoundError:
-        _die("ssh command not found; please install openssh-client or similar")
-    except Exception as e:
-        _die(f"ssh failed: {e}")
+    # Display SSH connection commands (both Vast.ai direct and Tailscale)
+    vast_ssh_target = f"{user}@{vast_ssh_host}"
+    vast_ssh_command = f"ssh -p {vast_ssh_port} {vast_ssh_target}"
+
+    tailscale_target = f"{user}@{ssh_addr}"
+    tailscale_ssh_command = f"ssh {tailscale_target}"
+
+    logging.getLogger(__name__).info("SSH to %s (instance_id=%s, label=%s)", vast_ssh_target, instance_id, label)
+
+    console.print(f"\n[green]Vast.ai Direct SSH:[/green]\n  [bold]{vast_ssh_command}[/bold]")
+    console.print(f"  Host: {vast_ssh_host} (port {vast_ssh_port})")
+
+    console.print(f"\n[green]Tailscale SSH:[/green]\n  [bold]{tailscale_ssh_command}[/bold]")
+    console.print(f"  Tailscale IP: {ssh_addr}")
+
+    console.print(f"\n[dim]Instance: {label} (id={instance_id})[/dim]\n")
+
 
 
 def main() -> None:  # entrypoint for `python -m app`
