@@ -500,6 +500,64 @@ def cmd_serve(
     uvicorn.run("app.api:api", host=host, port=port, reload=False)
 
 
+@app.command("ssh")
+def cmd_ssh(
+    target: str = typer.Argument(..., help="Vast.ai instance id or label"),
+    user: str = typer.Option("root", "--user", "-u", help="SSH user name"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """SSH into a Vast.ai instance via Tailscale.
+
+    Connects directly via Tailscale (no port forwarding needed).
+    """
+    import subprocess
+
+    _setup_logging(verbose)
+    settings = Settings()
+
+    try:
+        with VastClient(settings.vast_api_key) as vast:
+            instance_id = _resolve_instance_id(vast, target)
+            instance = vast.show_instance(instance_id)
+            if not instance:
+                _die(f"instance {instance_id}: not found (likely destroyed)")
+            label = (instance.get("label") or "").strip()
+            if not label:
+                _die(f"instance {instance_id} has no label; cannot identify Tailscale device")
+    except VastError as e:
+        _die(str(e))
+
+    # Find the Tailscale device by label/hostname
+    try:
+        with TailscaleClient(settings.tailscale_api_key, settings.tailscale_tailnet) as ts:
+            device = ts.find_online_by_hostname(label)
+            if not device:
+                _die(f"Tailscale device with hostname={label!r} not found or offline")
+            addresses = device.get("addresses", [])
+            if not addresses:
+                _die(f"Tailscale device {label!r} has no addresses")
+            # Pick the first IPv4 address (prefer v4 over v6)
+            ssh_addr = None
+            for addr in addresses:
+                if ":" not in str(addr):  # Simple heuristic: no colons = IPv4
+                    ssh_addr = addr
+                    break
+            if not ssh_addr:
+                ssh_addr = addresses[0]  # Fallback to first address
+    except TailscaleError as e:
+        _die(str(e))
+
+    # Invoke SSH
+    ssh_target = f"{user}@{ssh_addr}"
+    logging.getLogger(__name__).info("SSH to %s (instance_id=%s, label=%s)", ssh_target, instance_id, label)
+    try:
+        subprocess.run(["ssh", ssh_target], check=False)
+    except FileNotFoundError:
+        _die("ssh command not found; please install openssh-client or similar")
+    except Exception as e:
+        _die(f"ssh failed: {e}")
+
+
 def main() -> None:  # entrypoint for `python -m app`
     app()
 
