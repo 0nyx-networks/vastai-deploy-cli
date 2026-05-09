@@ -52,6 +52,8 @@ def _setup_logging(verbose: bool) -> None:
         format="%(asctime)s %(levelname)s %(name)s | %(message)s",
         datefmt="%H:%M:%S",
     )
+    if not verbose:
+        logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 @app.command("deploy")
@@ -111,12 +113,20 @@ def cmd_deploy(
 
 @app.command("offers")
 def cmd_offers(
-    target: str = typer.Option(..., "--target", "-t"),
+    target: Optional[str] = typer.Argument(None, help="Target template name under templates/ (e.g. ollama, comfyui). Auto-selected if only one template exists."),
     limit: int = typer.Option(10, "--limit"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Show Vast.ai offers that match the target's search filter."""
     _setup_logging(verbose)
+    if target is None:
+        available = sorted(p.name for p in TEMPLATE_DIR.iterdir() if p.is_dir() and not p.name.startswith("_"))
+        if len(available) == 1:
+            target = available[0]
+        elif available:
+            _die(f"TARGET argument is required. Available targets: {', '.join(available)}")
+        else:
+            _die("TARGET argument is required (no templates found)")
     settings = Settings()
     profile = TargetProfile.load(target)
     try:
