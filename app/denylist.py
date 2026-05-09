@@ -42,6 +42,12 @@ def add(machine_id: int | None, host_id: int | None, note: str = "") -> None:
             "added": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "note": note,
         }
+    if host_id is not None:
+        data["notes"][str(int(host_id))] = {
+            "machine_id": machine_id,
+            "added": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "note": note,
+        }
     save(data)
 
 
@@ -52,6 +58,7 @@ def remove(machine_id: int | None = None, host_id: int | None = None) -> None:
         data["notes"].pop(str(int(machine_id)), None)
     if host_id is not None:
         data["host_ids"] = [h for h in data["host_ids"] if int(h) != int(host_id)]
+        data["notes"].pop(str(int(host_id)), None)
     save(data)
 
 
