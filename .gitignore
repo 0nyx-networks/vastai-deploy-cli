@@ -30,5 +30,7 @@ venv/
 *.log
 
 # Deployment templates
-templates/*/onstart.sh
-!templates/_shared/onstart.sh
+templates/
+!templates/_shared/
+!templates/comfyui/
+!templates/ollama/

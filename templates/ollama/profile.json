@@ -19,10 +19,11 @@
         "cuda_min": 12.8,
         "rentable": true,
         "verified": true,
-        "max_dph": 0.6,
+        "max_dph": 0.5,
         "order": "dph_total",
         "geolocation": [
-            "JP"
+            "JP",
+            "US"
         ]
     }
 }

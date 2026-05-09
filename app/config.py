@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -77,7 +77,7 @@ class TargetProfile(BaseModel):
     image: str
     disk_gb: int = 32
     onstart_script: str  # path relative to template dir
-    env: dict[str, str] = Field(default_factory=dict)
+    env: dict[str, Annotated[str, BeforeValidator(str)]] = Field(default_factory=dict)
     runtype: Literal["ssh", "ssh_proxy", "args", "jupyter"] = "ssh"
     search: SearchFilter = Field(default_factory=SearchFilter)
     exposed_ports: list[int] = Field(default_factory=list)

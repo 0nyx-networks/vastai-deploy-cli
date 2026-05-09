@@ -7,7 +7,8 @@
     "env": {
         "TORCH_PLATFORM": "CUDA12.8",
         "TAILSCALE_HOSTNAME": "comfyui",
-        "TAILSCALE_TAG": "cloud-gpu-pods"
+        "TAILSCALE_TAG": "cloud-gpu-pods",
+        "NUMBER_OF_GPUS": "1"
     },
     "exposed_ports": [],
     "search": {
@@ -20,10 +21,11 @@
         "cuda_min": 12.8,
         "rentable": true,
         "verified": true,
-        "max_dph": 0.6,
+        "max_dph": 0.5,
         "order": "dph_total",
         "geolocation": [
-            "JP"
+            "JP",
+            "US"
         ]
     }
 }
