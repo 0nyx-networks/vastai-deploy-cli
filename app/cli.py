@@ -62,14 +62,14 @@ def cmd_deploy(
     name: Optional[str] = typer.Option(None, "--name", "-n", help="Hostname / Vast label. Auto-generated if omitted."),
     offer_id: Optional[int] = typer.Option(None, "--offer-id", help="Vast.ai offer id. Skips auto-search if set."),
     dry_run: bool = typer.Option(
-        True,
+        False,
         "--dry-run/--execute",
-        help="Default is dry-run (plan only). Pass --execute to actually deploy.",
+        help="Default is execute (deploy). Pass --dry-run to plan only.",
     ),
     wait: bool = typer.Option(
-        True,
+        False,
         "--wait/--no-wait",
-        help="Wait for the new pod to register with Tailscale before returning.",
+        help="Do not wait for the new pod to register with Tailscale before returning.",
     ),
     wait_timeout: float = typer.Option(
         300.0, "--wait-timeout", help="Tailscale registration wait timeout (seconds)."
