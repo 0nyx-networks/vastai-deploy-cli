@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -57,7 +58,7 @@ def _country_code(geo: str | None) -> str:
     return tail if len(tail) == 2 else geo.strip().upper()
 
 
-def filter_offers(offers: list[dict[str, Any]], search: "SearchFilter") -> list[dict[str, Any]]:
+def filter_offers(offers: list[dict[str, Any]], search: "SearchFilter") -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Defensive client-side filter. Tracks per-criterion rejection counts
     so a mismatch is observable instead of a silent zero.
     """
@@ -91,7 +92,31 @@ def filter_offers(offers: list[dict[str, Any]], search: "SearchFilter") -> list[
         out.append(o)
     if not out:
         log.warning("filter_offers rejected all %d offers: %s", len(offers), rejects)
-    return out
+    return out, rejects
+
+
+def _offer_reject_reasons(o: dict[str, Any], search: "SearchFilter") -> list[str]:
+    """Return a list of filter criteria that reject this single offer."""
+    reasons: list[str] = []
+    gpu_names = {n.lower() for n in (search.gpu_name or [])}
+    geos = {g.upper() for g in (search.geolocation or [])}
+    if denylist.is_denied(o):
+        reasons.append("denylist")
+    if gpu_names and (o.get("gpu_name") or "").lower() not in gpu_names:
+        reasons.append(f"gpu_name={o.get('gpu_name')!r} not in {sorted(gpu_names)}")
+    if geos and _country_code(o.get("geolocation")) not in geos:
+        reasons.append(f"geolocation={o.get('geolocation')!r} not in {sorted(geos)}")
+    if search.cuda_min is not None and float(o.get("cuda_max_good") or 0) < search.cuda_min:
+        reasons.append(f"cuda_max_good={o.get('cuda_max_good')} < {search.cuda_min}")
+    if search.gpu_ram_gb_min is not None and float(o.get("gpu_ram") or 0) < search.gpu_ram_gb_min * 1000:
+        reasons.append(f"gpu_ram={o.get('gpu_ram')}MB < {search.gpu_ram_gb_min}GB")
+    if search.max_dph is not None and float(o.get("dph_total") or 1e9) > search.max_dph:
+        reasons.append(f"dph_total={o.get('dph_total')} > max_dph={search.max_dph}")
+    if search.verified and o.get("verified") is False:
+        reasons.append("verified=False")
+    if search.rentable and o.get("rentable") is False:
+        reasons.append("rentable=False")
+    return reasons
 
 
 def rank_offers(offers: list[dict[str, Any]], geo_priority: list[str]) -> list[dict[str, Any]]:
@@ -206,7 +231,7 @@ def deploy(req: DeployRequest, settings: Settings | None = None) -> DeployResult
                     s.get("cuda_max_good"), s.get("gpu_ram"), s.get("dph_total"),
                     s.get("verified"), s.get("rentable"),
                 )
-            filtered = filter_offers(raw_offers, profile.search)
+            filtered, rejects = filter_offers(raw_offers, profile.search)
             log.info("after client-side filter: %d offers", len(filtered))
             if not filtered:
                 preview = [
@@ -219,12 +244,16 @@ def deploy(req: DeployRequest, settings: Settings | None = None) -> DeployResult
                         "dph_total": o.get("dph_total"),
                         "verified": o.get("verified"),
                         "rentable": o.get("rentable"),
+                        "reject_reason": _offer_reject_reasons(o, profile.search),
                     }
                     for o in raw_offers[:5]
                 ]
                 raise RuntimeError(
                     f"no offers passed filter (raw={len(raw_offers)}). "
-                    f"Top raw samples: {preview}. Try relaxing search criteria."
+                    "Reason: " + json.dumps({k: v for k, v in rejects.items() if v > 0}, ensure_ascii=False) + "\n"
+                    "Top raw samples:\n"
+                    + json.dumps(preview, indent=2, ensure_ascii=False)
+                    + "\nTry relaxing search criteria."
                 )
             candidates = rank_offers(filtered, profile.search.geolocation)
 
