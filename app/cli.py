@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
@@ -20,6 +20,21 @@ app = typer.Typer(
     "Run `--install-completion bash` to enable shell tab-completion.",
 )
 console = Console()
+
+# Module-level output format; set by --format global option.
+_output_format: str = "text"
+
+
+@app.callback()
+def _global_options(
+    fmt: str = typer.Option(
+        "text",
+        "--format",
+        help="Output format: text | json | yaml. For json/yaml, logs are suppressed.",
+    ),
+) -> None:
+    global _output_format
+    _output_format = fmt
 
 
 def _die(msg: str) -> None:
@@ -47,13 +62,32 @@ def _resolve_instance_id(vast: VastClient, ref: str) -> int:
 
 
 def _setup_logging(verbose: bool) -> None:
+    quiet = _output_format in ("json", "yaml")
     logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
+        level=logging.DEBUG if verbose else (logging.CRITICAL if quiet else logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s | %(message)s",
         datefmt="%H:%M:%S",
     )
     if not verbose:
         logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+def _emit(data: Any) -> None:
+    """Output *data* in the configured --format (text / json / yaml).
+
+    For json/yaml, writes directly to stdout so that piped output is clean.
+    For text, uses the Rich console (pretty JSON or string).
+    """
+    if _output_format == "json":
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    elif _output_format == "yaml":
+        import yaml  # pyyaml
+        print(yaml.dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False), end="")
+    else:
+        if isinstance(data, str):
+            console.print(data)
+        else:
+            console.print_json(json.dumps(data, ensure_ascii=False))
 
 
 @app.command("deploy")
@@ -94,21 +128,16 @@ def cmd_deploy(
         result = deploy(req)
     except (VastError, TailscaleError, FileNotFoundError, RuntimeError) as e:
         _die(str(e))
-    console.print_json(
-        json.dumps(
-            {
-                "target": result.target,
-                "hostname": result.hostname,
-                "offer_id": result.offer_id,
-                "instance_id": result.instance_id,
-                "deleted_offline_devices": result.deleted_offline_devices,
-                "auth_key_created": result.auth_key_created,
-                "tailscale_online": result.tailscale_online,
-                "dry_run": dry_run,
-            },
-            ensure_ascii=False,
-        )
-    )
+    _emit({
+        "target": result.target,
+        "hostname": result.hostname,
+        "offer_id": result.offer_id,
+        "instance_id": result.instance_id,
+        "deleted_offline_devices": result.deleted_offline_devices,
+        "auth_key_created": result.auth_key_created,
+        "tailscale_online": result.tailscale_online,
+        "dry_run": dry_run,
+    })
 
 
 @app.command("offers")
@@ -134,20 +163,35 @@ def cmd_offers(
             offers = vast.search_offers(profile.search.to_vast_query_string(), limit=limit)
     except VastError as e:
         _die(str(e))
-    t = Table(title=f"Vast.ai offers for {target}")
-    for col in ("id", "gpu_name", "num_gpus", "gpu_ram_gb", "cpu_cores", "dph_total", "geolocation"):
-        t.add_column(col)
-    for o in offers:
-        t.add_row(
-            str(o.get("id", "")),
-            str(o.get("gpu_name", "")),
-            str(o.get("num_gpus", "")),
-            f"{(o.get('gpu_ram') or 0) / 1024:.0f}",
-            str(o.get("cpu_cores", "")),
-            f"{o.get('dph_total', 0):.4f}",
-            str(o.get("geolocation", "")),
-        )
-    console.print(t)
+    rows = [
+        {
+            "id": o.get("id", ""),
+            "gpu_name": o.get("gpu_name", ""),
+            "num_gpus": o.get("num_gpus", ""),
+            "gpu_ram_gb": round((o.get("gpu_ram") or 0) / 1024),
+            "cpu_cores": o.get("cpu_cores", ""),
+            "dph_total": o.get("dph_total", 0),
+            "geolocation": o.get("geolocation", ""),
+        }
+        for o in offers
+    ]
+    if _output_format in ("json", "yaml"):
+        _emit(rows)
+    else:
+        t = Table(title=f"Vast.ai offers for {target}")
+        for col in ("id", "gpu_name", "num_gpus", "gpu_ram_gb", "cpu_cores", "dph_total", "geolocation"):
+            t.add_column(col)
+        for r in rows:
+            t.add_row(
+                str(r["id"]),
+                str(r["gpu_name"]),
+                str(r["num_gpus"]),
+                str(r["gpu_ram_gb"]),
+                str(r["cpu_cores"]),
+                f"{r['dph_total']:.4f}",
+                str(r["geolocation"]),
+            )
+        console.print(t)
 
 
 @app.command("instances")
@@ -160,19 +204,33 @@ def cmd_instances(verbose: bool = typer.Option(False, "--verbose", "-v")) -> Non
             instances = vast.list_instances()
     except VastError as e:
         _die(str(e))
-    t = Table(title="Vast.ai instances")
-    for col in ("id", "label", "status", "gpu_name", "image", "dph_total"):
-        t.add_column(col)
-    for i in instances:
-        t.add_row(
-            str(i.get("id", "")),
-            str(i.get("label", "")),
-            str(i.get("actual_status") or i.get("intended_status") or ""),
-            str(i.get("gpu_name", "")),
-            str(i.get("image_uuid") or i.get("image", "")),
-            f"{i.get('dph_total', 0):.4f}",
-        )
-    console.print(t)
+    rows = [
+        {
+            "id": i.get("id", ""),
+            "label": i.get("label", ""),
+            "status": str(i.get("actual_status") or i.get("intended_status") or ""),
+            "gpu_name": i.get("gpu_name", ""),
+            "image": str(i.get("image_uuid") or i.get("image", "")),
+            "dph_total": i.get("dph_total", 0),
+        }
+        for i in instances
+    ]
+    if _output_format in ("json", "yaml"):
+        _emit(rows)
+    else:
+        t = Table(title="Vast.ai instances")
+        for col in ("id", "label", "status", "gpu_name", "image", "dph_total"):
+            t.add_column(col)
+        for r in rows:
+            t.add_row(
+                str(r["id"]),
+                str(r["label"]),
+                r["status"],
+                str(r["gpu_name"]),
+                r["image"],
+                f"{r['dph_total']:.4f}",
+            )
+        console.print(t)
 
 
 @app.command("logs")
@@ -252,25 +310,42 @@ def cmd_status(
                 instances = [single]
     except VastError as e:
         _die(str(e))
-    t = Table(title="Vast.ai instances")
-    for col in ("id", "label", "intended", "actual", "cur_state", "gpu_name", "geo", "dph_total", "machine_id", "host_id"):
-        t.add_column(col)
-    for i in instances:
-        if not i:
-            continue
-        t.add_row(
-            str(i.get("id", "")),
-            str(i.get("label", "")),
-            str(i.get("intended_status") or ""),
-            str(i.get("actual_status") or ""),
-            str(i.get("cur_state") or ""),
-            str(i.get("gpu_name", "")),
-            str(i.get("geolocation", "")),
-            f"{i.get('dph_total', 0):.4f}",
-            str(i.get("machine_id", "")),
-            str(i.get("host_id", "")),
-        )
-    console.print(t)
+    rows = [
+        {
+            "id": i.get("id", ""),
+            "label": i.get("label", ""),
+            "intended": str(i.get("intended_status") or ""),
+            "actual": str(i.get("actual_status") or ""),
+            "cur_state": str(i.get("cur_state") or ""),
+            "gpu_name": i.get("gpu_name", ""),
+            "geo": i.get("geolocation", ""),
+            "dph_total": i.get("dph_total", 0),
+            "machine_id": i.get("machine_id", ""),
+            "host_id": i.get("host_id", ""),
+        }
+        for i in instances
+        if i
+    ]
+    if _output_format in ("json", "yaml"):
+        _emit(rows)
+    else:
+        t = Table(title="Vast.ai instances")
+        for col in ("id", "label", "intended", "actual", "cur_state", "gpu_name", "geo", "dph_total", "machine_id", "host_id"):
+            t.add_column(col)
+        for r in rows:
+            t.add_row(
+                str(r["id"]),
+                str(r["label"]),
+                r["intended"],
+                r["actual"],
+                r["cur_state"],
+                str(r["gpu_name"]),
+                str(r["geo"]),
+                f"{r['dph_total']:.4f}",
+                str(r["machine_id"]),
+                str(r["host_id"]),
+            )
+        console.print(t)
 
 
 @app.command("stop")
@@ -287,7 +362,7 @@ def cmd_stop(
             resp = vast.stop_instance(instance_id)
     except VastError as e:
         _die(str(e))
-    console.print({
+    _emit({
         "stopped_request_for": instance_id,
         "api_response": resp,
         "note": "actual state may take ~10-60s to flip; run `status` again. storage still billed.",
@@ -308,7 +383,7 @@ def cmd_start(
             vast.start_instance(instance_id)
     except VastError as e:
         _die(str(e))
-    console.print(f"started instance {instance_id}")
+    _emit({"started": instance_id})
 
 
 @app.command("destroy")
@@ -418,7 +493,7 @@ def cmd_destroy(
             note=note or f"destroyed via CLI ({instance_id})",
         )
 
-    console.print(msg)
+    _emit(msg)
 
 
 @app.command("denylist")
@@ -432,15 +507,15 @@ def cmd_denylist(
     from . import denylist as dl
 
     if action == "show":
-        console.print_json(json.dumps(dl.load(), ensure_ascii=False))
+        _emit(dl.load())
     elif action == "add":
         if machine_id is None and host_id is None:
             raise typer.BadParameter("--machine-id or --host-id required")
         dl.add(machine_id=machine_id, host_id=host_id, note=note)
-        console.print({"added": {"machine_id": machine_id, "host_id": host_id}})
+        _emit({"added": {"machine_id": machine_id, "host_id": host_id}})
     elif action == "remove":
         dl.remove(machine_id=machine_id, host_id=host_id)
-        console.print({"removed": {"machine_id": machine_id, "host_id": host_id}})
+        _emit({"removed": {"machine_id": machine_id, "host_id": host_id}})
     else:
         raise typer.BadParameter(f"unknown action: {action}")
 
@@ -473,7 +548,7 @@ def cmd_ts_find(
                 "givenName": d.get("givenName"),
                 "lastSeen": d.get("lastSeen"),
             })
-    console.print_json(json.dumps({"target": hostname, "matches": rows}, ensure_ascii=False))
+    _emit({"target": hostname, "matches": rows})
 
 
 @app.command("ts-purge")
@@ -486,7 +561,7 @@ def cmd_ts_purge(
     settings = Settings()
     with TailscaleClient(settings.tailscale_api_key, settings.tailscale_tailnet) as ts:
         deleted = ts.purge_offline(name)
-    console.print({"deleted": deleted})
+    _emit({"deleted": deleted})
 
 
 @app.command("serve")
@@ -558,13 +633,22 @@ def cmd_ssh(
 
     logging.getLogger(__name__).info("SSH to %s (instance_id=%s, label=%s)", vast_ssh_target, instance_id, label)
 
-    console.print(f"\n[green]Vast.ai Direct SSH:[/green]\n  [bold]{vast_ssh_command}[/bold]")
-    console.print(f"  Host: {vast_ssh_host} (port {vast_ssh_port})")
-
-    console.print(f"\n[green]Tailscale SSH:[/green]\n  [bold]{tailscale_ssh_command}[/bold]")
-    console.print(f"  Tailscale IP: {ssh_addr}")
-
-    console.print(f"\n[dim]Instance: {label} (id={instance_id})[/dim]\n")
+    if _output_format in ("json", "yaml"):
+        _emit({
+            "instance_id": instance_id,
+            "label": label,
+            "vast_ssh_host": vast_ssh_host,
+            "vast_ssh_port": vast_ssh_port,
+            "vast_ssh_command": vast_ssh_command,
+            "tailscale_ip": ssh_addr,
+            "tailscale_ssh_command": tailscale_ssh_command,
+        })
+    else:
+        console.print(f"\n[green]Vast.ai Direct SSH:[/green]\n  [bold]{vast_ssh_command}[/bold]")
+        console.print(f"  Host: {vast_ssh_host} (port {vast_ssh_port})")
+        console.print(f"\n[green]Tailscale SSH:[/green]\n  [bold]{tailscale_ssh_command}[/bold]")
+        console.print(f"  Tailscale IP: {ssh_addr}")
+        console.print(f"\n[dim]Instance: {label} (id={instance_id})[/dim]\n")
 
 
 
