@@ -182,35 +182,14 @@ def deploy(req: DeployRequest, settings: Settings | None = None) -> DeployResult
     auth_key: str = ""
     auth_key_id: str = ""
 
+    # Purge stale offline devices up-front so the new node can claim the
+    # hostname later. Auth-key creation is deferred until we know a Vast.ai
+    # offer is actually deployable — otherwise we'd waste a (short-lived but
+    # tagged) key when no candidate matches the search filter.
     with TailscaleClient(settings.tailscale_api_key, settings.tailscale_tailnet) as ts:
         deleted = ts.purge_offline(hostname)
         if deleted:
             log.info("deleted offline tailscale devices: %s", deleted)
-
-        if req.dry_run:
-            log.info("dry-run: skipping auth-key creation")
-        else:
-            key_record = ts.create_auth_key(
-                tags=api_tags,
-                ephemeral=True,
-                reusable=False,
-                preauthorized=True,
-                expiry_seconds=600,
-                description=f"deploy-vast-ai {hostname}",
-            )
-            auth_key = key_record["key"]
-            auth_key_id = key_record["id"]
-            log.info("created tailscale auth-key id=%s (ephemeral, tags=%s)",
-                     auth_key_id, api_tags)
-
-    # Container env: profile values are the source of truth; we only
-    # inject the freshly-issued AUTHKEY and the resolved hostname.
-    # TAILSCALE_TAG (if any) is preserved from profile verbatim.
-    env = {
-        **profile.env,
-        "TAILSCALE_HOSTNAME": hostname,
-        "TAILSCALE_AUTHKEY": auth_key,
-    }
 
     with VastClient(settings.vast_api_key) as vast:
         if req.offer_id is not None:
@@ -269,13 +248,40 @@ def deploy(req: DeployRequest, settings: Settings | None = None) -> DeployResult
                 tailscale_online=False,
                 raw={
                     "dry_run": True,
-                    "env_keys": sorted(env.keys()),
+                    "env_keys": sorted({**profile.env, "TAILSCALE_HOSTNAME": "", "TAILSCALE_AUTHKEY": ""}.keys()),
                     "top_candidates": [
                         {k: c.get(k) for k in ("id", "gpu_name", "dph_total", "geolocation")}
                         for c in candidates[:5]
                     ],
                 },
             )
+
+        # A deployable candidate exists — only now do we issue a Tailscale
+        # auth-key. The key is short-lived (10 min) and consumed at container
+        # start, so issuing it any earlier (e.g. before the offer search)
+        # would burn a tagged key whenever the filter returns nothing.
+        with TailscaleClient(settings.tailscale_api_key, settings.tailscale_tailnet) as ts:
+            key_record = ts.create_auth_key(
+                tags=api_tags,
+                ephemeral=True,
+                reusable=False,
+                preauthorized=True,
+                expiry_seconds=600,
+                description=f"deploy-vast-ai {hostname}",
+            )
+            auth_key = key_record["key"]
+            auth_key_id = key_record["id"]
+            log.info("created tailscale auth-key id=%s (ephemeral, tags=%s)",
+                     auth_key_id, api_tags)
+
+        # Container env: profile values are the source of truth; we only
+        # inject the freshly-issued AUTHKEY and the resolved hostname.
+        # TAILSCALE_TAG (if any) is preserved from profile verbatim.
+        env = {
+            **profile.env,
+            "TAILSCALE_HOSTNAME": hostname,
+            "TAILSCALE_AUTHKEY": auth_key,
+        }
 
         resp: dict[str, Any] = {}
         instance_id = None
