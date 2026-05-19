@@ -23,6 +23,7 @@ class DeployRequest:
     dry_run: bool = False
     wait_for_tailscale: bool = True
     wait_timeout: float = 300.0
+    ignore_denylist: bool = False
 
 
 @dataclass
@@ -58,7 +59,7 @@ def _country_code(geo: str | None) -> str:
     return tail if len(tail) == 2 else geo.strip().upper()
 
 
-def filter_offers(offers: list[dict[str, Any]], search: "SearchFilter") -> tuple[list[dict[str, Any]], dict[str, int]]:
+def filter_offers(offers: list[dict[str, Any]], search: "SearchFilter", ignore_denylist: bool = False) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Defensive client-side filter. Tracks per-criterion rejection counts
     so a mismatch is observable instead of a silent zero.
     """
@@ -68,7 +69,7 @@ def filter_offers(offers: list[dict[str, Any]], search: "SearchFilter") -> tuple
     gpu_names = {n.lower() for n in (search.gpu_name or [])}
     geos = {g.upper() for g in (search.geolocation or [])}
     for o in offers:
-        if denylist.is_denied(o):
+        if not ignore_denylist and denylist.is_denied(o):
             rejects["denylist"] += 1; continue
         if gpu_names and (o.get("gpu_name") or "").lower() not in gpu_names:
             rejects["gpu_name"] += 1; continue
@@ -95,12 +96,12 @@ def filter_offers(offers: list[dict[str, Any]], search: "SearchFilter") -> tuple
     return out, rejects
 
 
-def _offer_reject_reasons(o: dict[str, Any], search: "SearchFilter") -> list[str]:
+def _offer_reject_reasons(o: dict[str, Any], search: "SearchFilter", ignore_denylist: bool = False) -> list[str]:
     """Return a list of filter criteria that reject this single offer."""
     reasons: list[str] = []
     gpu_names = {n.lower() for n in (search.gpu_name or [])}
     geos = {g.upper() for g in (search.geolocation or [])}
-    if denylist.is_denied(o):
+    if not ignore_denylist and denylist.is_denied(o):
         reasons.append("denylist")
     if gpu_names and (o.get("gpu_name") or "").lower() not in gpu_names:
         reasons.append(f"gpu_name={o.get('gpu_name')!r} not in {sorted(gpu_names)}")
@@ -210,8 +211,10 @@ def deploy(req: DeployRequest, settings: Settings | None = None) -> DeployResult
                     s.get("cuda_max_good"), s.get("gpu_ram"), s.get("dph_total"),
                     s.get("verified"), s.get("rentable"),
                 )
-            filtered, rejects = filter_offers(raw_offers, profile.search)
+            filtered, rejects = filter_offers(raw_offers, profile.search, ignore_denylist=req.ignore_denylist)
             log.info("after client-side filter: %d offers", len(filtered))
+            if req.ignore_denylist:
+                log.warning("denylist is being ignored (--ignore-denylist was set)")
             if not filtered:
                 preview = [
                     {
@@ -223,7 +226,7 @@ def deploy(req: DeployRequest, settings: Settings | None = None) -> DeployResult
                         "dph_total": o.get("dph_total"),
                         "verified": o.get("verified"),
                         "rentable": o.get("rentable"),
-                        "reject_reason": _offer_reject_reasons(o, profile.search),
+                        "reject_reason": _offer_reject_reasons(o, profile.search, ignore_denylist=req.ignore_denylist),
                     }
                     for o in raw_offers[:5]
                 ]

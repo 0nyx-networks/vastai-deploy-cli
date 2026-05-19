@@ -108,6 +108,11 @@ def cmd_deploy(
     wait_timeout: float = typer.Option(
         300.0, "--wait-timeout", help="Tailscale registration wait timeout (seconds)."
     ),
+    ignore_denylist: bool = typer.Option(
+        False,
+        "--ignore-denylist",
+        help="Temporarily skip denylist filtering (machine_ids / host_ids are not excluded).",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """End-to-end one-shot deploy."""
@@ -123,6 +128,7 @@ def cmd_deploy(
     req = DeployRequest(
         target=target, name=name, offer_id=offer_id, dry_run=dry_run,
         wait_for_tailscale=wait, wait_timeout=wait_timeout,
+        ignore_denylist=ignore_denylist,
     )
     try:
         result = deploy(req)
